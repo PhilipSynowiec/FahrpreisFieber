@@ -2170,7 +2170,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7b3ce9818cd3122ddb2b87d2b387e4ad, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GeminiReviewService
-  apiKey: AIzaSyAg_hHc6Ydo_YWB6oi8Onq93x8dWL4FY3E
+  apiKey: apikey
   geminiModel: gemini-2.5-flash
 --- !u!4 &1505810505 stripped
 Transform:
