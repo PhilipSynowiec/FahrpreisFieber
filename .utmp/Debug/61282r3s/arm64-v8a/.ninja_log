@@ -1,0 +1,12 @@
+# ninja log v5
+1	95	1767651125200324808	FramePacing/CMakeFiles/swappywrapper.dir/UnitySwappyWrapper.cpp.o	dde8b2ce1e68f91
+95	138	1767651125241318140	/home/philip/FahrpreisFieber/Library/Bee/Android/Prj/IL2CPP/Gradle/unityLibrary/build/intermediates/cxx/Debug/61282r3s/obj/arm64-v8a/libswappywrapper.so	470a8efc5e5f97e
+1	517	1767651125620256507	GameActivity/CMakeFiles/game.dir/UGAInputKeyEvent.cpp.o	571b2fd1f2418492
+1	523	1767651125626255532	GameActivity/CMakeFiles/game.dir/UGAInputMotionEvent.cpp.o	c0ea408874b541dd
+0	549	1767651125651251466	GameActivity/CMakeFiles/game.dir/UGADebug.cpp.o	2b16c6a8cfe04e20
+0	551	1767651125654250979	GameActivity/CMakeFiles/game.dir/UGAConfiguration.cpp.o	ef83296ddad0d484
+0	561	1767651125664249352	GameActivity/CMakeFiles/game.dir/UGAEntry.cpp.o	2736fdf0364389e4
+1	583	1767651125686245775	GameActivity/CMakeFiles/game.dir/UGASoftKeyboard.cpp.o	cbb05f7e76a4a216
+1	598	1767651125701243335	GameActivity/CMakeFiles/game.dir/UGAInput.cpp.o	9fd4577b1eee8adc
+0	636	1767651125737237481	GameActivity/CMakeFiles/game.dir/UGAApplication.cpp.o	4a6b5554f569ed65
+636	657	1767651125763233253	/home/philip/FahrpreisFieber/Library/Bee/Android/Prj/IL2CPP/Gradle/unityLibrary/build/intermediates/cxx/Debug/61282r3s/obj/arm64-v8a/libgame.so	b102343e40356a48

@@ -29,7 +29,7 @@ MonoBehaviour:
     - rid: 2523935648482853054
       type: {class: AndroidPlatformBuildSettings, ns: UnityEditor.Android, asm: UnityEditor.Android.Extensions}
       data:
-        m_Development: 0
+        m_Development: 1
         m_ConnectProfiler: 0
         m_BuildWithDeepProfilingSupport: 0
         m_AllowDebugging: 0
@@ -48,8 +48,28 @@ MonoBehaviour:
         m_DebugSymbolLevel: 1
         m_DebugSymbolFormat: 5
         m_CurrentDeploymentTargetId: __builtin__target_default
-        m_BuildType: 2
+        m_BuildType: 1
         m_LinkTimeOptimization: 0
         m_BuildAppBundle: 0
         m_IPAddressToConnect: 
         m_SymlinkSources: 0
+--- !u!114 &5216847572884142752
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 15012, guid: 0000000000000000e000000000000000, type: 0}
+  m_Name: BuildAutomationSettings
+  m_EditorClassIdentifier: UnityEditor.dll::UnityEditor.Build.Profile.BuildAutomationSettings
+  m_OperatingSystemValue: sequoia
+  m_OperatingSystemFamily: mac
+  m_XcodeVersion: default
+  m_AndroidSdkVersion: android_sdk_35
+  m_UnityArchitecture: AppleSilicon
+  m_MachineTypeId: orka_standard_v1
+  m_CredentialsId: 6c1cba7b-891d-4036-9a58-f66908e7cf61
+  m_BuildTarget: 13
