@@ -6,7 +6,7 @@ using UnityEngine.Networking;
 
 public class GeminiReviewService : MonoBehaviour
 {
-    [SerializeField] private string apiKey = "AIzaSyBg57nnOsCHDxl6oWdb1ifGt7FdfixsGLc";
+    [SerializeField] private string apiKey;
     [SerializeField] private string geminiModel = "gemini-2.5-flash"; // User confirmed this works in other projects
 
     private const string ApiUrl = "https://generativelanguage.googleapis.com/v1beta/models/{0}:generateContent?key={1}";
