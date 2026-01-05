@@ -1,59 +1,57 @@
-using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// Maintains an exponentially-weighted history of "required speeds" (or any speed metric),
-/// and provides a normal distribution to sample future expected speeds.
+/// Manages difficulty (target speed) using a Dynamic Difficulty Adjustment (DDA) system.
+/// Adjusts the target speed based on how well the player performs relative to the time limit.
 /// </summary>
 public class RatingSpeedModel : MonoBehaviour
 {
-    [Header("Default distribution (used before enough data)")]
-    [SerializeField] private float defaultMean = 6.0f;   // world units/sec
-    [SerializeField] private float defaultStd = 1.5f;
+    [Header("Difficulty Settings")]
+    [SerializeField] private float currentMean = 6.0f;   // Current target speed (world units/sec)
+    [SerializeField] private float defaultStd = 1.5f;    // Constant variance
 
-    [Header("Exponential weighting")]
-    [Range(0.5f, 0.999f)]
-    [SerializeField] private float gamma = 0.90f;        // weight decay per older trip
-    [SerializeField] private int maxHistory = 50;
+    [Header("Adjustment Logic")]
+    [SerializeField] private float adjustmentStrength = 2.0f; // How much the mean changes per 100% performance diff
+    [SerializeField] private float maxAdjustmentRatio = 0.5f; // Cap performance ratio to +/- 50% to ignore outliers
+    
+    [Header("Bounds")]
+    [SerializeField] private float minMean = 3.0f;
+    [SerializeField] private float maxMean = 15.0f;
 
-    private readonly List<float> speeds = new();
-
-    public void AddSpeedSample(float speed)
+    /// <summary>
+    /// Reports the result of a trip to adjust difficulty.
+    /// </summary>
+    /// <param name="elapsed">Time taken to complete the trip.</param>
+    /// <param name="timeLimit">The time limit for the trip.</param>
+    public void ReportTripResult(float elapsed, float timeLimit)
     {
-        speed = Mathf.Max(0.1f, speed);
-        speeds.Insert(0, speed);              // newest at index 0
-        if (speeds.Count > maxHistory) speeds.RemoveAt(speeds.Count - 1);
+        if (timeLimit <= 0.001f) return;
+
+        // Calculate performance ratio:
+        // Positive = Finished early (Success)
+        // Negative = Late (Failure)
+        // e.g. Limit 30s, Elapsed 20s -> (30 - 20) / 30 = 0.33 (33% faster)
+        // e.g. Limit 30s, Elapsed 40s -> (30 - 40) / 30 = -0.33 (33% slower)
+        float ratio = (timeLimit - elapsed) / timeLimit;
+
+        // Clamp to avoid outliers (e.g. AFK or cheats)
+        ratio = Mathf.Clamp(ratio, -maxAdjustmentRatio, maxAdjustmentRatio);
+
+        // Adjust the mean
+        // If ratio is positive (good), mean increases (harder)
+        // If ratio is negative (bad), mean decreases (easier)
+        currentMean += ratio * adjustmentStrength;
+
+        // Keep within reasonable bounds
+        currentMean = Mathf.Clamp(currentMean, minMean, maxMean);
+
+        Debug.Log($"[RatingSpeedModel] Trip Report: Elapsed {elapsed:F1}s / Limit {timeLimit:F1}s. " +
+                  $"Ratio: {ratio:F2}. New Difficulty: {currentMean:F2}");
     }
 
     public (float mean, float std) GetDistribution()
     {
-        if (speeds.Count < 5)
-            return (defaultMean, defaultStd);
-
-        double wSum = 0;
-        double mean = 0;
-
-        for (int i = 0; i < speeds.Count; i++)
-        {
-            double w = Mathf.Pow(gamma, i);
-            wSum += w;
-            mean += w * speeds[i];
-        }
-        mean /= wSum;
-
-        double var = 0;
-        for (int i = 0; i < speeds.Count; i++)
-        {
-            double w = Mathf.Pow(gamma, i);
-            double d = speeds[i] - mean;
-            var += w * d * d;
-        }
-        var /= wSum;
-
-        float std = Mathf.Sqrt((float)var);
-        std = Mathf.Clamp(std, 0.4f, 5.0f);
-
-        return ((float)mean, std);
+        return (currentMean, defaultStd);
     }
 
     // Box-Muller normal sample

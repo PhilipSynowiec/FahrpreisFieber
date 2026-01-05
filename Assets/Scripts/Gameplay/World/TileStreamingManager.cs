@@ -121,6 +121,7 @@ public class TileStreamingManager : MonoBehaviour
         if (prefab == null) return;
 
         Vector3 pos = GridToWorld(g);
+        if (data.kind == TileKind.Building) pos.y = 0.5f;
         var go = Instantiate(prefab, pos, Quaternion.identity, transform);
         go.name = $"Tile_{g.x}_{g.y}_{data.kind}";
 

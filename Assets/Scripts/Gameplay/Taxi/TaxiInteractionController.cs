@@ -9,6 +9,9 @@ public class TaxiInteractionController : MonoBehaviour
     [SerializeField] private PassengerSpawner spawner;
     [SerializeField] private TripManager trips;
 
+    [Header("UI")]
+    [SerializeField] private ToastMessageUI toast;
+
     [Header("Offer Widget Prefab (World Space, display only)")]
     [SerializeField] private PassengerOfferWidget offerWidgetPrefab;
 
@@ -30,6 +33,8 @@ public class TaxiInteractionController : MonoBehaviour
         if (hud == null) hud = FindFirstObjectByType<TaxiHUDUI>();
         if (spawner == null) spawner = FindFirstObjectByType<PassengerSpawner>();
         if (trips == null) trips = FindFirstObjectByType<TripManager>();
+        if (toast == null) toast = FindFirstObjectByType<ToastMessageUI>();
+        if (reviewService == null) reviewService = FindFirstObjectByType<GeminiReviewService>();
     }
 
     private void Update()
@@ -38,7 +43,7 @@ public class TaxiInteractionController : MonoBehaviour
 
         bool stopped = IsStopped();
 
-        // ACTIVE TRIP: reuse same HUD button for dropoff (only when near + stopped)
+        // ACTIVE TRIP: use HUD button for dropoff
         if (trips.HasActiveTrip)
         {
             ClearNearbyOffer();
@@ -47,16 +52,13 @@ public class TaxiInteractionController : MonoBehaviour
             hud.SetAccept(visible: true, enabled: canDrop, label: dropoffLabel, onClick: () =>
             {
                 if (!canDrop) return;
-                FreezeCar(true);
-                var result = trips.CompleteTrip(transform.position);
-                // If you still have the left result popup, keep it. Otherwise just unfreeze.
-                FreezeCar(false);
+                DoDropoff();
             });
 
             return;
         }
 
-        // NO TRIP: show offer widget above closest passenger + enable HUD accept when close+stopped
+        // NO TRIP: show offer widget + HUD accept
         var p = FindNearestPassenger();
         if (p != nearbyPassenger)
             SetNearbyPassenger(p);
@@ -69,17 +71,63 @@ public class TaxiInteractionController : MonoBehaviour
         });
     }
 
+    private bool droppingOff;
+
     private void OnAccept()
     {
         if (nearbyPassenger == null || trips == null) return;
         if (!IsStopped()) return;
 
+        droppingOff = false; // Reset for the new trip
         trips.StartTrip(nearbyPassenger.Job);
 
         if (spawner != null) spawner.DespawnPassenger(nearbyPassenger);
         else Destroy(nearbyPassenger.gameObject);
 
         ClearNearbyOffer();
+    }
+
+    [SerializeField] private GeminiReviewService reviewService;
+
+    private void DoDropoff()
+    {
+        if (trips == null || droppingOff) return;
+        droppingOff = true;
+
+        FreezeCar(true);
+        TripResult result = trips.CompleteTrip(transform.position);
+        
+        // Calculate performance ratio for the AI
+        float ratio = 0f;
+        if (result.timeLimitSeconds > 0)
+            ratio = (result.timeLimitSeconds - result.elapsedSeconds) / result.timeLimitSeconds;
+
+        if (reviewService != null)
+        {
+            // Show "Generating..." or similar if desired, or just wait
+            // if (toast != null) toast.Show("Asking passenger for review...");
+
+            reviewService.GenerateReview(ratio, result.onTime, (review) =>
+            {
+                FreezeCar(false);
+                if (toast != null)
+                {
+                    string header = result.onTime ? $"Delivered! (+{result.payoutCoins})" : "Late! (+0)";
+                    toast.Show($"{header}\n\"{review}\"");
+                }
+            });
+        }
+        else
+        {
+            // Fallback if service not assigned
+            FreezeCar(false);
+            if (toast != null)
+            {
+                string review = result.onTime ? "Good job!" : "Too slow!";
+                string header = result.onTime ? $"Delivered! (+{result.payoutCoins})" : "Late! (+0)";
+                toast.Show($"{header}\nReview: {review}");
+            }
+        }
     }
 
     private bool IsStopped()

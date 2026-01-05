@@ -5,7 +5,8 @@ public class TripManager : MonoBehaviour
     [Header("Refs")]
     [SerializeField] private TileStreamingManager world;
     [SerializeField] private RatingSpeedModel speedModel;
-    [SerializeField] private CurrencyManager currency;
+
+    private CurrencyManager currency;
 
     [Header("Arrival")]
     [SerializeField] private float arriveDistanceWorld = 2.5f;
@@ -24,7 +25,16 @@ public class TripManager : MonoBehaviour
     {
         if (world == null) world = FindFirstObjectByType<TileStreamingManager>();
         if (speedModel == null) speedModel = FindFirstObjectByType<RatingSpeedModel>();
-        if (currency == null) currency = CurrencyManager.Instance;
+
+        // Auto-resolve currency
+        if (currency == null)
+            currency = CurrencyManager.Instance != null ? CurrencyManager.Instance : FindFirstObjectByType<CurrencyManager>();
+    }
+
+    private void OnEnable()
+    {        // In case CurrencyManager is created later (DDOL)
+        if (currency == null)
+            currency = CurrencyManager.Instance != null ? CurrencyManager.Instance : FindFirstObjectByType<CurrencyManager>();
     }
 
     public void StartTrip(PassengerJob job)
@@ -45,21 +55,26 @@ public class TripManager : MonoBehaviour
     {
         if (activeJob == null) return default;
 
+        // ensure currency is resolved even if scene changed
+        if (currency == null)
+            currency = CurrencyManager.Instance != null ? CurrencyManager.Instance : FindFirstObjectByType<CurrencyManager>();
+
         float elapsed = Time.time - tripStartTime;
         bool reached = IsNearDestination(carPos);
         bool onTime = reached && elapsed <= activeJob.timeLimitSeconds;
 
         float achievedAvgSpeed = activeJob.distanceWorld / Mathf.Max(0.01f, elapsed);
+        string rating = onTime ? "gut" : "schlecht";
+        int payout = onTime ? activeJob.quotedPriceCoins : 0;
 
-        string rating = (onTime) ? "gut" : "schlecht";
-        int payout = (onTime) ? activeJob.quotedPriceCoins : 0;
+        if (payout > 0)
+        {
+            if (currency != null) currency.AddCoins(payout);
+            else Debug.LogWarning("TripManager: CurrencyManager missing; payout not applied.");
+        }
 
-        if (payout > 0 && currency != null)
-            currency.AddCoins(payout);
-
-        // update model with the required speed of this trip (you can change this later)
         if (speedModel != null)
-            speedModel.AddSpeedSample(activeJob.requiredAvgSpeed);
+            speedModel.ReportTripResult(elapsed, activeJob.timeLimitSeconds);
 
         var result = new TripResult
         {
@@ -83,7 +98,7 @@ public class TripManager : MonoBehaviour
         DespawnMarker();
         if (destinationMarkerPrefab == null || world == null || activeJob == null) return;
 
-        Vector3 pos = GridToWorld(activeJob.destinationBuilding) + new Vector3(0f, 0.2f, 0f);
+        Vector3 pos = GridToWorld(activeJob.destinationBuilding) + new Vector3(0f, 0.7f, 0f);
         markerInstance = Instantiate(destinationMarkerPrefab, pos, Quaternion.identity);
         markerInstance.name = "DestinationMarker";
     }

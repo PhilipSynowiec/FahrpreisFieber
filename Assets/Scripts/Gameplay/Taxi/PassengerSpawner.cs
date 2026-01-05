@@ -175,7 +175,7 @@ public class PassengerSpawner : MonoBehaviour
         float edgeHalf = ts * 0.5f;
         float along = Random.Range(-ts * alongEdgeRandom, ts * alongEdgeRandom);
 
-        return center + dir * (edgeHalf + standOffFromBuilding) + perp * along;
+        return center + dir * (edgeHalf - standOffFromBuilding) + perp * along + new Vector3(0f, 1.2f, 0f);
     }
 
     private Vector3 GridToWorld(Vector2Int g) => new Vector3(g.x * world.TileSize, 0f, g.y * world.TileSize);

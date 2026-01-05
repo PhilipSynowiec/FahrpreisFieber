@@ -4,64 +4,63 @@ using UnityEngine.InputSystem;
 [RequireComponent(typeof(Rigidbody))]
 public class CarControllerInputSystem : MonoBehaviour
 {
-    [Header("Speed")]
-    [SerializeField] private float maxSpeed = 12f;
-    [SerializeField] private float accel = 18f;
-    [SerializeField] private float decel = 22f;
+    [Header("Speed & Power")]
+    [SerializeField] private float accelerationForce = 2000f;
+    [SerializeField] private float brakingForce = 1500f;
+    [SerializeField] private float maxSpeed = 20f;
+    [SerializeField] private float reverseSpeed = 10f;
 
     [Header("Steering")]
-    [SerializeField] private float turnSpeedDeg = 180f;
-    [SerializeField] private float turnSpeedAtZero = 60f;
+    [SerializeField] private float turnSpeed = 150f;
+    [SerializeField] private float grip = 0.95f; // 0 = ice, 1 = rails
 
-    [Header("Anti-slide")]
-    [SerializeField] private float lateralFriction = 12f;
+    [Header("Physics")]
+    [SerializeField] private Transform centerOfMass;
 
-    [Header("Collision (reliable)")]
-    [SerializeField] private LayerMask solidMask = ~0;
-    [SerializeField] private float skin = 0.03f;
-    [SerializeField] private int depenetrationIters = 3;
+    [SerializeField] private MobileCarInput mobileInput;
+
 
     private Rigidbody rb;
-    private Collider carCol;
-
     private InputAction moveAction;
-    private float currentSpeed;
+    private float currentSteerInput;
+    private float currentThrottleInput;
 
     private void Awake()
     {
         rb = GetComponent<Rigidbody>();
-
-        // IMPORTANT: allow collider on child (very common setup)
-        carCol = GetComponent<Collider>();
-        if (carCol == null) carCol = GetComponentInChildren<Collider>();
-
-        if (carCol == null)
-            Debug.LogError("CarControllerInputSystem: No Collider found on car (root or children).");
-
-        rb.useGravity = false;
+        rb.useGravity = false; // We keep gravity off as per original design, or we can turn it on if we want jumps. 
+                               // Original had useGravity = false. Let's stick to that for now to avoid falling through world if not set up.
+                               // Actually, for a physics car, gravity is usually good, but if the map is flat and we want arcade feel, false is fine.
+                               // Let's keep it false but ensure we don't float away.
         rb.isKinematic = false;
-
-        rb.constraints = RigidbodyConstraints.FreezePositionY |
-                         RigidbodyConstraints.FreezeRotationX |
-                         RigidbodyConstraints.FreezeRotationZ;
-
         rb.interpolation = RigidbodyInterpolation.Interpolate;
         rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
 
+        // Freeze rotation on X and Z to prevent flipping over, allow Y for steering
+        rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ | RigidbodyConstraints.FreezePositionY;
+
+        if (centerOfMass != null)
+        {
+            rb.centerOfMass = centerOfMass.localPosition;
+        }
+
         moveAction = new InputAction("Move", InputActionType.Value, expectedControlType: "Vector2");
 
+        // WASD
         var wasd = moveAction.AddCompositeBinding("2DVector");
         wasd.With("Up", "<Keyboard>/w");
         wasd.With("Down", "<Keyboard>/s");
         wasd.With("Left", "<Keyboard>/a");
         wasd.With("Right", "<Keyboard>/d");
 
+        // Arrows
         var arrows = moveAction.AddCompositeBinding("2DVector");
         arrows.With("Up", "<Keyboard>/upArrow");
         arrows.With("Down", "<Keyboard>/downArrow");
         arrows.With("Left", "<Keyboard>/leftArrow");
         arrows.With("Right", "<Keyboard>/rightArrow");
 
+        // Gamepad
         moveAction.AddBinding("<Gamepad>/leftStick");
     }
 
@@ -70,134 +69,102 @@ public class CarControllerInputSystem : MonoBehaviour
 
     private void FixedUpdate()
     {
-        Vector2 move = moveAction.ReadValue<Vector2>();
-        float steer = Mathf.Clamp(move.x, -1f, 1f);
-        float throttle = Mathf.Clamp(move.y, -1f, 1f);
-        float dt = Time.fixedDeltaTime;
-
-        float targetSpeed = throttle * maxSpeed;
-        float rate = (Mathf.Abs(targetSpeed) > Mathf.Abs(currentSpeed)) ? accel : decel;
-        currentSpeed = Mathf.MoveTowards(currentSpeed, targetSpeed, rate * dt);
-
-        float speed01 = Mathf.InverseLerp(0f, maxSpeed, Mathf.Abs(currentSpeed));
-        float turnRate = Mathf.Lerp(turnSpeedAtZero, turnSpeedDeg, speed01);
-
-        rb.MoveRotation(rb.rotation * Quaternion.Euler(0f, steer * turnRate * dt, 0f));
-
-        // Depenetrate BEFORE move (safe)
-        Depenetrate();
-
-        Vector3 forward = rb.rotation * Vector3.forward;
-        Vector3 delta = forward * (currentSpeed * dt);
-
-        SafeMove(delta);
-
-        // Depenetrate AFTER move (safe)
-        Depenetrate();
-
-        // Lateral damping
-        Vector3 v = rb.linearVelocity;
-        Vector3 right = rb.rotation * Vector3.right;
-        float lateral = Vector3.Dot(v, right);
-        v -= right * lateral * Mathf.Clamp01(lateralFriction * dt);
-        rb.linearVelocity = v;
+        ReadInput();
+        ApplyMovement();
+        ApplySteering();
+        ApplyLateralFriction();
     }
 
-    private void SafeMove(Vector3 delta)
+    private void ReadInput()
     {
-        if (carCol == null) { rb.MovePosition(rb.position + delta); return; }
-        if (delta.sqrMagnitude < 1e-10f) return;
+        Vector2 move;
 
-        Vector3 pos = rb.position;
-        Vector3 dir = delta.normalized;
-        float dist = delta.magnitude;
-
-        if (CastAlong(dir, dist + skin, out RaycastHit hit))
+        if (mobileInput != null && Application.isMobilePlatform)
         {
-            float allowed = Mathf.Max(0f, hit.distance - skin);
-
-            // Stop pushing into the wall
-            if (allowed <= 0.001f) currentSpeed = 0f;
-
-            rb.MovePosition(pos + dir * allowed);
+            move = new Vector2(mobileInput.Steer, mobileInput.Throttle);
         }
         else
         {
-            rb.MovePosition(pos + delta);
+            move = moveAction.ReadValue<Vector2>();
         }
+
+        currentSteerInput = move.x;
+        currentThrottleInput = move.y;
     }
 
-    private bool CastAlong(Vector3 dir, float dist, out RaycastHit hit)
+    private void ApplyMovement()
     {
-        hit = default;
-        const QueryTriggerInteraction q = QueryTriggerInteraction.Ignore;
+        // Calculate speed in the forward direction
+        float forwardSpeed = Vector3.Dot(rb.linearVelocity, transform.forward);
 
-        if (carCol is CapsuleCollider cap)
+        // Determine if we are accelerating, braking, or reversing
+        float forceToApply = 0f;
+
+        if (currentThrottleInput > 0)
         {
-            GetCapsuleWorld(cap, out Vector3 p1, out Vector3 p2, out float r);
-            return Physics.CapsuleCast(p1, p2, r, dir, out hit, dist, solidMask, q);
-        }
-
-        if (carCol is BoxCollider box)
-        {
-            Vector3 center = box.transform.TransformPoint(box.center);
-            Vector3 half = Vector3.Scale(box.size * 0.5f, box.transform.lossyScale);
-            return Physics.BoxCast(center, half, dir, out hit, box.transform.rotation, dist, solidMask, q);
-        }
-
-        // Fallback: bounds cast by sphere (conservative)
-        float r0 = Mathf.Max(0.25f, Mathf.Min(carCol.bounds.extents.x, carCol.bounds.extents.z));
-        Vector3 c = carCol.bounds.center;
-        return Physics.SphereCast(c, r0, dir, out hit, dist, solidMask, q);
-    }
-
-    private void Depenetrate()
-    {
-        if (carCol == null) return;
-
-        for (int iter = 0; iter < depenetrationIters; iter++)
-        {
-            Bounds b = carCol.bounds;
-            Collider[] overlaps = Physics.OverlapBox(
-                b.center, b.extents, carCol.transform.rotation,
-                solidMask, QueryTriggerInteraction.Ignore);
-
-            bool moved = false;
-
-            for (int i = 0; i < overlaps.Length; i++)
+            // Accelerating forward
+            if (forwardSpeed < maxSpeed)
             {
-                Collider other = overlaps[i];
-                if (other == null || other == carCol) continue;
-
-                if (Physics.ComputePenetration(
-                        carCol, carCol.transform.position, carCol.transform.rotation,
-                        other, other.transform.position, other.transform.rotation,
-                        out Vector3 dir, out float distance))
-                {
-                    float push = distance + skin;
-                    rb.MovePosition(rb.position + dir * push);
-                    moved = true;
-                }
+                forceToApply = currentThrottleInput * accelerationForce;
             }
+        }
+        else if (currentThrottleInput < 0)
+        {
+            // Reversing or Braking
+            if (forwardSpeed > 0.1f)
+            {
+                // Braking while moving forward
+                forceToApply = currentThrottleInput * brakingForce;
+            }
+            else if (forwardSpeed > -reverseSpeed)
+            {
+                // Reversing
+                forceToApply = currentThrottleInput * accelerationForce;
+            }
+        }
+        else
+        {
+            // No input, apply drag/coasting logic if needed, or just let physics drag handle it
+            // For snappier stop, we can add auto-braking here
+             if (Mathf.Abs(forwardSpeed) > 0.1f)
+             {
+                 forceToApply = -Mathf.Sign(forwardSpeed) * (brakingForce * 0.2f); // Light drag
+             }
+        }
 
-            if (!moved) break;
+        rb.AddRelativeForce(Vector3.forward * forceToApply * Time.fixedDeltaTime, ForceMode.Acceleration);
+    }
+
+    private void ApplySteering()
+    {
+        // Only steer if we are moving
+        float minSpeedToTurn = 0.1f;
+        float speedFactor = Mathf.Clamp01(rb.linearVelocity.magnitude / 2f); // Full turning at 2 m/s
+
+        if (rb.linearVelocity.magnitude > minSpeedToTurn)
+        {
+            // Reverse steering when going backward feels more natural for cars
+            float directionMult = 1f;
+            float forwardSpeed = Vector3.Dot(rb.linearVelocity, transform.forward);
+            if (forwardSpeed < -0.1f) directionMult = -1f;
+
+            float turn = currentSteerInput * turnSpeed * speedFactor * directionMult * Time.fixedDeltaTime;
+            Quaternion turnRotation = Quaternion.Euler(0f, turn, 0f);
+            rb.MoveRotation(rb.rotation * turnRotation);
         }
     }
 
-    private void GetCapsuleWorld(CapsuleCollider cap, out Vector3 p1, out Vector3 p2, out float radius)
+    private void ApplyLateralFriction()
     {
-        Transform t = cap.transform;
-        Vector3 center = t.TransformPoint(cap.center);
-
-        Vector3 s = t.lossyScale;
-        float rScale = Mathf.Max(s.x, s.z);
-        radius = Mathf.Max(0.01f, cap.radius * rScale);
-
-        float height = Mathf.Max(radius * 2f, cap.height * s.y);
-        float half = (height * 0.5f) - radius;
-
-        Vector3 up = t.up;
-        p1 = center + up * half;
-        p2 = center - up * half;
+        // Kill sideways velocity to prevent drifting like a hovercraft
+        Vector3 localVelocity = transform.InverseTransformDirection(rb.linearVelocity);
+        
+        // Apply grip: keep X velocity (sideways) close to 0
+        float lateralSpeed = localVelocity.x;
+        float frictionForce = -lateralSpeed * grip / Time.fixedDeltaTime;
+        
+        // Apply as acceleration so it's mass-independent
+        Vector3 impulse = transform.right * frictionForce * Time.fixedDeltaTime;
+        rb.AddForce(impulse, ForceMode.VelocityChange);
     }
 }
