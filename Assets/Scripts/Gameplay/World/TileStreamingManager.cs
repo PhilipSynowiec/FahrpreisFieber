@@ -1,14 +1,7 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-/// <summary>
-/// Streams individual tiles around a target (car). No chunks.
-/// Keeps logical data and spawned visuals separate.
-/// - tileDataCache: stores TileData for already generated tiles (can be bounded later)
-/// - spawned: stores instantiated GameObjects for currently visible tiles
-///
-/// You implement GenerateTile(gx, gy) to define the city logic.
-/// </summary>
 public class TileStreamingManager : MonoBehaviour
 {
     [Header("Target")]
@@ -23,26 +16,26 @@ public class TileStreamingManager : MonoBehaviour
     [SerializeField] private TilePrefabSet prefabs;
 
     [Header("Streaming")]
-    [Tooltip("How many tiles to instantiate per frame (prevents spikes).")]
     [SerializeField] private int buildPerFrame = 30;
-
-    [Tooltip("If true, recompute visibility only when the target enters a new tile.")]
     [SerializeField] private bool updateOnlyOnTileChange = true;
 
     [Header("Determinism")]
     [SerializeField] private int worldSeed = 12345;
 
-    // Logical world data (may grow if you drive forever; you can bound this later)
+    // Logical world data
     private readonly Dictionary<Vector2Int, TileData> tileDataCache = new();
-
-    // Rendered instances only (bounded by radius)
+    // Rendered instances only
     private readonly Dictionary<Vector2Int, GameObject> spawned = new();
-
-    // Queue for building to avoid frame spikes
+    // Build queue
     private readonly Queue<Vector2Int> buildQueue = new();
 
     private Vector2Int lastCenter = new(int.MinValue, int.MinValue);
     private int radiusSqr;
+
+    public float TileSize => tileSize;
+
+    public event Action<Vector2Int, GameObject, TileData> TileSpawned;
+    public event Action<Vector2Int, GameObject> TileUnloaded;
 
     private void Awake()
     {
@@ -79,7 +72,6 @@ public class TileStreamingManager : MonoBehaviour
         if (!force && center == lastCenter) return;
         lastCenter = center;
 
-        // Determine which tiles should be visible
         var shouldExist = HashSetPool<Vector2Int>.Get();
 
         for (int dx = -radiusTiles; dx <= radiusTiles; dx++)
@@ -91,14 +83,12 @@ public class TileStreamingManager : MonoBehaviour
             }
         }
 
-        // Enqueue missing tiles for building
         foreach (var g in shouldExist)
         {
             if (!spawned.ContainsKey(g))
                 buildQueue.Enqueue(g);
         }
 
-        // Unload tiles not in the visible set
         var toRemove = ListPool<Vector2Int>.Get();
         foreach (var kv in spawned)
         {
@@ -115,42 +105,57 @@ public class TileStreamingManager : MonoBehaviour
     private void BuildSomeTiles()
     {
         int n = Mathf.Max(1, buildPerFrame);
-
         while (n-- > 0 && buildQueue.Count > 0)
         {
             var g = buildQueue.Dequeue();
-            if (spawned.ContainsKey(g)) continue; // may have been built already
-
+            if (spawned.ContainsKey(g)) continue;
             EnsureTile(g);
         }
     }
 
     private void EnsureTile(Vector2Int g)
     {
-        // Fetch or generate logical data
-        if (!tileDataCache.TryGetValue(g, out var data))
-        {
-            data = GenerateTile(g.x, g.y);
-            tileDataCache[g] = data;
-        }
+        TileData data = GetOrGenerateTileData(g);
 
-        // Choose prefab
         GameObject prefab = (data.kind == TileKind.Road) ? prefabs.roadPrefab : prefabs.buildingPrefab;
         if (prefab == null) return;
 
-        // Spawn visual instance
         Vector3 pos = GridToWorld(g);
         var go = Instantiate(prefab, pos, Quaternion.identity, transform);
         go.name = $"Tile_{g.x}_{g.y}_{data.kind}";
+
+        var inst = go.GetComponent<TileInstance>();
+        if (inst == null) inst = go.AddComponent<TileInstance>();
+        inst.Init(g, data);
+
         spawned[g] = go;
+        TileSpawned?.Invoke(g, go, data);
     }
 
     private void UnloadTile(Vector2Int g)
     {
         if (!spawned.TryGetValue(g, out var go)) return;
         spawned.Remove(g);
+
+        TileUnloaded?.Invoke(g, go);
         if (go != null) Destroy(go);
     }
+
+    public bool IsSpawned(Vector2Int g) => spawned.ContainsKey(g);
+
+    public bool TryGetTileData(Vector2Int g, out TileData data) => tileDataCache.TryGetValue(g, out data);
+
+    public TileData GetOrGenerateTileData(Vector2Int g)
+    {
+        if (!tileDataCache.TryGetValue(g, out var data))
+        {
+            data = GenerateTile(g.x, g.y);
+            tileDataCache[g] = data;
+        }
+        return data;
+    }
+
+    public IEnumerable<KeyValuePair<Vector2Int, GameObject>> EnumerateSpawnedTiles() => spawned;
 
     private Vector2Int WorldToGrid(Vector3 world)
     {
@@ -165,23 +170,14 @@ public class TileStreamingManager : MonoBehaviour
     }
 
     // =========================
-    // YOU IMPLEMENT THIS METHOD
+    // YOU replace this with your logic
     // =========================
     private TileData GenerateTile(int gx, int gy)
     {
-        // Replace this stub with your coherent city logic.
-        // REQUIREMENT: deterministic for the same (worldSeed, gx, gy)
-        // so tiles don't change when they unload/reload.
-
         int h = Hash(worldSeed, gx, gy);
-
-        // Very simple placeholder:
-        // - main grid roads every 8 tiles
-        // - otherwise mostly buildings with occasional roads
         bool mainRoad = (gx % 8 == 0) || (gy % 8 == 0);
-        bool extraRoad = ((h & 31) == 0); // ~3% roads
+        bool extraRoad = ((h & 31) == 0);
         bool isRoad = mainRoad || extraRoad;
-
         int variant = (h >> 8) & 3;
         return isRoad ? TileData.Road(variant) : TileData.Building(variant);
     }
@@ -200,30 +196,17 @@ public class TileStreamingManager : MonoBehaviour
         }
     }
 
-    // Small pools to reduce GC allocations
     private static class ListPool<T>
     {
         private static readonly Stack<List<T>> pool = new();
-
         public static List<T> Get() => pool.Count > 0 ? pool.Pop() : new List<T>(256);
-
-        public static void Release(List<T> list)
-        {
-            list.Clear();
-            pool.Push(list);
-        }
+        public static void Release(List<T> list) { list.Clear(); pool.Push(list); }
     }
 
     private static class HashSetPool<T>
     {
         private static readonly Stack<HashSet<T>> pool = new();
-
         public static HashSet<T> Get() => pool.Count > 0 ? pool.Pop() : new HashSet<T>();
-
-        public static void Release(HashSet<T> set)
-        {
-            set.Clear();
-            pool.Push(set);
-        }
+        public static void Release(HashSet<T> set) { set.Clear(); pool.Push(set); }
     }
 }
