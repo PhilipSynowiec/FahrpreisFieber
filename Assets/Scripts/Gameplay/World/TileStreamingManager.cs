@@ -28,13 +28,14 @@ public class TileStreamingManager : MonoBehaviour
     private readonly Dictionary<Vector2Int, GameObject> spawned = new();
     // Build queue
     private readonly Queue<Vector2Int> buildQueue = new();
+    private readonly Dictionary<Vector2Int, (GameObject visual, int users)> buildingLots = new();
 
     private Vector2Int lastCenter = new(int.MinValue, int.MinValue);
     private int radiusSqr;
 
     public float TileSize => tileSize;
+    public int WorldSeed => worldSeed;
 
-    public event Action<Vector2Int, GameObject, TileData> TileSpawned;
     public event Action<Vector2Int, GameObject> TileUnloaded;
 
     private void Awake()
@@ -45,6 +46,7 @@ public class TileStreamingManager : MonoBehaviour
     private void Start()
     {
         Refresh(force: true);
+        BuildSomeTiles();
     }
 
     private void Update()
@@ -69,7 +71,8 @@ public class TileStreamingManager : MonoBehaviour
         if (target == null || prefabs == null) return;
 
         Vector2Int center = WorldToGrid(target.position);
-        if (!force && center == lastCenter) return;
+        if (!force && updateOnlyOnTileChange && center == lastCenter) return;
+        radiusSqr = radiusTiles * radiusTiles;
         lastCenter = center;
 
         var shouldExist = HashSetPool<Vector2Int>.Get();
@@ -83,11 +86,14 @@ public class TileStreamingManager : MonoBehaviour
             }
         }
 
+        // Rebuild only the current demand; never accumulate duplicate or out-of-range work.
+        buildQueue.Clear();
+        var pending = ListPool<Vector2Int>.Get();
         foreach (var g in shouldExist)
-        {
-            if (!spawned.ContainsKey(g))
-                buildQueue.Enqueue(g);
-        }
+            if (!spawned.ContainsKey(g)) pending.Add(g);
+        pending.Sort((a, b) => (a - center).sqrMagnitude.CompareTo((b - center).sqrMagnitude));
+        foreach (var g in pending) buildQueue.Enqueue(g);
+        ListPool<Vector2Int>.Release(pending);
 
         var toRemove = ListPool<Vector2Int>.Get();
         foreach (var kv in spawned)
@@ -117,51 +123,76 @@ public class TileStreamingManager : MonoBehaviour
     {
         TileData data = GetOrGenerateTileData(g);
 
-        GameObject prefab = (data.kind == TileKind.Road) ? prefabs.roadPrefab : prefabs.buildingPrefab;
+        GameObject prefab = prefabs.roadPrefab;
+        Quaternion rotation = Quaternion.identity;
+        if (data.kind == TileKind.Building)
+        {
+            AcquireBuilding(data);
+            var tile = new GameObject($"Tile_{g.x}_{g.y}_Building");
+            tile.transform.SetParent(transform, false); tile.transform.position = GridToWorld(g);
+            tile.AddComponent<TileInstance>().Init(g, data);
+            tileDataCache[g] = data; spawned[g] = tile;
+            return;
+        }
+        if (data.kind == TileKind.Park) prefab = prefabs.parkPrefab;
+        else
+        {
+            bool left = CityLayout.IsRoad(worldSeed, g.x - 1, g.y);
+            bool right = CityLayout.IsRoad(worldSeed, g.x + 1, g.y);
+            bool down = CityLayout.IsRoad(worldSeed, g.x, g.y - 1);
+            bool up = CityLayout.IsRoad(worldSeed, g.x, g.y + 1);
+            bool horizontal = left && right && !up && !down;
+            bool vertical = up && down && !left && !right;
+            if (!horizontal && !vertical && prefabs.junctionPrefab != null) prefab = prefabs.junctionPrefab;
+            else if (horizontal) rotation = Quaternion.Euler(0f, 90f, 0f);
+        }
         if (prefab == null) return;
 
-        Vector3 pos = GridToWorld(g);
-        if (data.kind == TileKind.Building) pos.y = 0.5f;
-        var go = Instantiate(prefab, pos, Quaternion.identity, transform);
+        var go = Instantiate(prefab, GridToWorld(g), rotation, transform);
+        // Authored city assets use a ten-meter tile footprint.
+        go.transform.localScale *= tileSize / 10f;
         go.name = $"Tile_{g.x}_{g.y}_{data.kind}";
 
         var inst = go.GetComponent<TileInstance>();
         if (inst == null) inst = go.AddComponent<TileInstance>();
         inst.Init(g, data);
 
+        tileDataCache[g] = data;
         spawned[g] = go;
-        TileSpawned?.Invoke(g, go, data);
     }
 
     private void UnloadTile(Vector2Int g)
     {
         if (!spawned.TryGetValue(g, out var go)) return;
         spawned.Remove(g);
+        if (tileDataCache.TryGetValue(g, out var data) && data.kind == TileKind.Building) ReleaseBuilding(data.lotOrigin);
+        tileDataCache.Remove(g);
 
         TileUnloaded?.Invoke(g, go);
         if (go != null) Destroy(go);
     }
 
+    public int GetRoadDistance(Vector2Int from, Vector2Int to) => CityLayout.RoadDistance(worldSeed, from.x, from.y, to.x, to.y);
+
     public bool IsSpawned(Vector2Int g) => spawned.ContainsKey(g);
 
-    public bool TryGetTileData(Vector2Int g, out TileData data) => tileDataCache.TryGetValue(g, out data);
 
     public TileData GetOrGenerateTileData(Vector2Int g)
     {
         if (!tileDataCache.TryGetValue(g, out var data))
         {
             data = GenerateTile(g.x, g.y);
-            tileDataCache[g] = data;
+            // Unloaded job lookups must not grow an unbounded world cache.
         }
         return data;
     }
 
     public IEnumerable<KeyValuePair<Vector2Int, GameObject>> EnumerateSpawnedTiles() => spawned;
 
-    private Vector2Int WorldToGrid(Vector3 world)
+    public Vector2Int WorldToGrid(Vector3 world)
     {
-        int gx = Mathf.FloorToInt(world.x / tileSize);
-        int gy = Mathf.FloorToInt(world.z / tileSize);
+        int gx = Mathf.FloorToInt(world.x / tileSize + 0.5f);
+        int gy = Mathf.FloorToInt(world.z / tileSize + 0.5f);
         return new Vector2Int(gx, gy);
     }
 
@@ -170,31 +201,36 @@ public class TileStreamingManager : MonoBehaviour
         return new Vector3(g.x * tileSize, 0f, g.y * tileSize);
     }
 
-    // =========================
-    // YOU replace this with your logic
-    // =========================
     private TileData GenerateTile(int gx, int gy)
     {
-        int h = Hash(worldSeed, gx, gy);
-        bool mainRoad = (gx % 8 == 0) || (gy % 8 == 0);
-        bool extraRoad = ((h & 31) == 0);
-        bool isRoad = mainRoad || extraRoad;
-        int variant = (h >> 8) & 3;
-        return isRoad ? TileData.Road(variant) : TileData.Building(variant);
+        if (CityLayout.IsRoad(worldSeed, gx, gy)) return TileData.Road();
+        if (!CityLots.TryGetLot(worldSeed, gx, gy, out var lot)) return TileData.Park();
+        return TileData.Building(CityLayout.BuildingVariant(worldSeed, lot.x, lot.y), lot);
     }
 
-    private static int Hash(int seed, int x, int y)
+    private void AcquireBuilding(TileData data)
     {
-        unchecked
+        if (buildingLots.TryGetValue(data.lotOrigin, out var existing))
         {
-            int h = seed;
-            h = h * 31 + x;
-            h = h * 31 + y;
-            h ^= (h << 13);
-            h ^= (h >> 17);
-            h ^= (h << 5);
-            return h;
+            buildingLots[data.lotOrigin] = (existing.visual, existing.users + 1);
+            return;
         }
+        var variants = prefabs.buildingVariants;
+        var prefab = variants != null && variants.Length > 0 ? variants[data.variantId % variants.Length] : prefabs.buildingPrefab;
+        if (!CityLots.TryGetLot(worldSeed, data.lotOrigin.x, data.lotOrigin.y, out var lot))
+            throw new InvalidOperationException("Building parcel anchor is missing.");
+        var visual = new GameObject($"BuildingLot_{lot.AnchorX}_{lot.AnchorY}");
+        visual.transform.SetParent(transform, false);
+        visual.transform.position = new Vector3(lot.x*tileSize, 0, lot.y*tileSize);
+        visual.AddComponent<BuildingLotVisual>().Build(prefab, lot, tileSize);
+        buildingLots.Add(data.lotOrigin, (visual, 1));
+    }
+
+    private void ReleaseBuilding(Vector2Int origin)
+    {
+        if (!buildingLots.TryGetValue(origin, out var lot)) return;
+        if (lot.users > 1) buildingLots[origin] = (lot.visual, lot.users-1);
+        else { buildingLots.Remove(origin); if (lot.visual != null) Destroy(lot.visual); }
     }
 
     private static class ListPool<T>

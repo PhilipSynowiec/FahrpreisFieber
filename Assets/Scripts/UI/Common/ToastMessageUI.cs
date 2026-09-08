@@ -1,11 +1,15 @@
 using TMPro;
 using UnityEngine;
+using UnityEngine.UI;
 
 public class ToastMessageUI : MonoBehaviour
 {
     [Header("UI")]
     [SerializeField] private TMP_Text text;
     [SerializeField] private CanvasGroup canvasGroup;
+
+    [SerializeField] private Image[] stars;
+    [SerializeField] private TMP_Text payoutText;
 
     [Header("Timing")]
     [SerializeField] private float showSeconds = 4f;
@@ -34,6 +38,16 @@ public class ToastMessageUI : MonoBehaviour
             if (fadeT >= 1f)
                 HideImmediate();
         }
+    }
+
+    public void ShowReview(string review, int rating, int payout)
+    {
+        rating = Mathf.Clamp(rating, 1, 5);
+        if (stars != null)
+            for (int i = 0; i < stars.Length; i++)
+                if (stars[i] != null) stars[i].color = i < rating ? new Color32(235, 172, 28, 255) : new Color32(197, 204, 209, 255);
+        if (payoutText != null) payoutText.text = $"+{payout}";
+        Show(review);
     }
 
     public void Show(string message)

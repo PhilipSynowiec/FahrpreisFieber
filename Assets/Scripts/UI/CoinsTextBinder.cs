@@ -4,15 +4,13 @@ using UnityEngine;
 public class CoinsTextBinder : MonoBehaviour
 {
     [SerializeField] private TMP_Text label;
-
-    private void Reset()
+    private void Reset() => label = GetComponent<TMP_Text>();
+    private void OnEnable()
     {
-        label = GetComponent<TMP_Text>();
+        if (label == null) label = GetComponent<TMP_Text>();
+        CurrencyManager.BalanceChanged += Refresh;
+        Refresh(CurrencyManager.Balance);
     }
-
-    private void Update()
-    {
-        if (CurrencyManager.Instance == null) return;
-        label.text = CurrencyManager.Instance.Coins.ToString();
-    }
+    private void OnDisable() => CurrencyManager.BalanceChanged -= Refresh;
+    private void Refresh(int coins) { if (label != null) label.text = $"{coins:N0}"; }
 }

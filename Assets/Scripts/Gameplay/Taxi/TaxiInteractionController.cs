@@ -4,7 +4,6 @@ public class TaxiInteractionController : MonoBehaviour
 {
     [Header("Refs")]
     [SerializeField] private Rigidbody carRb;
-    [SerializeField] private MonoBehaviour carControllerToDisable; // CarControllerInputSystem
     [SerializeField] private TaxiHUDUI hud;
     [SerializeField] private PassengerSpawner spawner;
     [SerializeField] private TripManager trips;
@@ -12,17 +11,14 @@ public class TaxiInteractionController : MonoBehaviour
     [Header("UI")]
     [SerializeField] private ToastMessageUI toast;
 
-    [Header("Offer Widget Prefab (World Space, display only)")]
+    [Header("Offer Widget Prefab")]
     [SerializeField] private PassengerOfferWidget offerWidgetPrefab;
 
     [Header("Pickup Detection")]
     [SerializeField] private float detectRadius = 2.5f;
     [SerializeField] private LayerMask passengerLayer = ~0;
-    [SerializeField] private float stopSpeedThreshold = 0.2f;
-
-    [Header("HUD Labels")]
-    [SerializeField] private string acceptLabel = "Accept";
-    [SerializeField] private string dropoffLabel = "Dropoff";
+    [SerializeField, Min(0f)] private float pickupSpeedThreshold = 4f;
+    [SerializeField, Min(0f)] private float dropoffSpeedThreshold = 4f;
 
     private Passenger nearbyPassenger;
     private PassengerOfferWidget nearbyWidget;
@@ -34,22 +30,22 @@ public class TaxiInteractionController : MonoBehaviour
         if (spawner == null) spawner = FindFirstObjectByType<PassengerSpawner>();
         if (trips == null) trips = FindFirstObjectByType<TripManager>();
         if (toast == null) toast = FindFirstObjectByType<ToastMessageUI>();
-        if (reviewService == null) reviewService = FindFirstObjectByType<GeminiReviewService>();
+        if (reviewService == null) reviewService = FindFirstObjectByType<OfflineReviewService>();
     }
 
     private void Update()
     {
         if (hud == null || trips == null) return;
 
-        bool stopped = IsStopped();
+        bool canBoardAtSpeed = IsWithinSpeed(pickupSpeedThreshold);
 
         // ACTIVE TRIP: use HUD button for dropoff
         if (trips.HasActiveTrip)
         {
             ClearNearbyOffer();
 
-            bool canDrop = trips.IsNearDestination(transform.position) && stopped;
-            hud.SetAccept(visible: true, enabled: canDrop, label: dropoffLabel, onClick: () =>
+            bool canDrop = trips.IsNearDestination(transform.position) && IsWithinSpeed(dropoffSpeedThreshold);
+            hud.SetAccept(visible: true, enabled: canDrop, droppingOff: true, onClick: () =>
             {
                 if (!canDrop) return;
                 DoDropoff();
@@ -63,8 +59,8 @@ public class TaxiInteractionController : MonoBehaviour
         if (p != nearbyPassenger)
             SetNearbyPassenger(p);
 
-        bool canAccept = (nearbyPassenger != null) && stopped;
-        hud.SetAccept(visible: true, enabled: canAccept, label: acceptLabel, onClick: () =>
+        bool canAccept = (nearbyPassenger != null) && canBoardAtSpeed;
+        hud.SetAccept(visible: true, enabled: canAccept, droppingOff: false, onClick: () =>
         {
             if (!canAccept) return;
             OnAccept();
@@ -76,7 +72,7 @@ public class TaxiInteractionController : MonoBehaviour
     private void OnAccept()
     {
         if (nearbyPassenger == null || trips == null) return;
-        if (!IsStopped()) return;
+        if (!IsWithinSpeed(pickupSpeedThreshold)) return;
 
         droppingOff = false; // Reset for the new trip
         trips.StartTrip(nearbyPassenger.Job);
@@ -87,54 +83,33 @@ public class TaxiInteractionController : MonoBehaviour
         ClearNearbyOffer();
     }
 
-    [SerializeField] private GeminiReviewService reviewService;
+    [SerializeField] private OfflineReviewService reviewService;
 
     private void DoDropoff()
     {
-        if (trips == null || droppingOff) return;
+        // Recheck at click time, not just when the HUD last refreshed.
+        if (trips == null || !trips.HasActiveTrip || droppingOff || !trips.IsNearDestination(transform.position)
+            || !IsWithinSpeed(dropoffSpeedThreshold)) return;
         droppingOff = true;
 
-        FreezeCar(true);
         TripResult result = trips.CompleteTrip(transform.position);
         
-        // Calculate performance ratio for the AI
+        // Calculate trip performance for the review service
         float ratio = 0f;
         if (result.timeLimitSeconds > 0)
             ratio = (result.timeLimitSeconds - result.elapsedSeconds) / result.timeLimitSeconds;
 
-        if (reviewService != null)
-        {
-            // Show "Generating..." or similar if desired, or just wait
-            // if (toast != null) toast.Show("Asking passenger for review...");
-
-            reviewService.GenerateReview(ratio, result.onTime, (review) =>
-            {
-                FreezeCar(false);
-                if (toast != null)
-                {
-                    string header = result.onTime ? $"Delivered! (+{result.payoutCoins})" : "Late! (+0)";
-                    toast.Show($"{header}\n\"{review}\"");
-                }
-            });
-        }
-        else
-        {
-            // Fallback if service not assigned
-            FreezeCar(false);
-            if (toast != null)
-            {
-                string review = result.onTime ? "Good job!" : "Too slow!";
-                string header = result.onTime ? $"Delivered! (+{result.payoutCoins})" : "Late! (+0)";
-                toast.Show($"{header}\nReview: {review}");
-            }
-        }
+        int stars = ReviewRating.FromTimeRatio(ratio);
+        string review = reviewService != null ? reviewService.GetReview(ratio)
+            : PassengerReviewCatalog.ByStars[stars - 1][0];
+        if (toast != null) toast.ShowReview(review, stars, result.payoutCoins);
     }
 
-    private bool IsStopped()
+    private bool IsWithinSpeed(float threshold)
     {
         if (carRb == null) return true;
         Vector3 v = carRb.linearVelocity; v.y = 0f;
-        return v.magnitude <= stopSpeedThreshold;
+        return v.sqrMagnitude <= threshold * threshold;
     }
 
     private Passenger FindNearestPassenger()
@@ -176,15 +151,4 @@ public class TaxiInteractionController : MonoBehaviour
         nearbyWidget = null;
     }
 
-    private void FreezeCar(bool freeze)
-    {
-        if (carControllerToDisable != null)
-            carControllerToDisable.enabled = !freeze;
-
-        if (carRb != null && freeze)
-        {
-            carRb.linearVelocity = Vector3.zero;
-            carRb.angularVelocity = Vector3.zero;
-        }
-    }
 }

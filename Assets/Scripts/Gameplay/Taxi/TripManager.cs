@@ -16,6 +16,7 @@ public class TripManager : MonoBehaviour
 
     public bool HasActiveTrip => activeJob != null;
     public PassengerJob ActiveJob => activeJob;
+    public float RemainingSeconds => activeJob == null ? 0f : Mathf.Max(0f, activeJob.timeLimitSeconds - (Time.time - tripStartTime));
 
     private PassengerJob activeJob;
     private float tripStartTime;
@@ -32,7 +33,8 @@ public class TripManager : MonoBehaviour
     }
 
     private void OnEnable()
-    {        // In case CurrencyManager is created later (DDOL)
+    {
+        // Resolve the persistent manager when a scene is enabled.
         if (currency == null)
             currency = CurrencyManager.Instance != null ? CurrencyManager.Instance : FindFirstObjectByType<CurrencyManager>();
     }
@@ -47,7 +49,7 @@ public class TripManager : MonoBehaviour
     public bool IsNearDestination(Vector3 carPos)
     {
         if (activeJob == null || world == null) return false;
-        Vector3 dest = GridToWorld(activeJob.destinationBuilding);
+        Vector3 dest = activeJob.destinationWorld;
         return Vector3.Distance(new Vector3(carPos.x, 0f, carPos.z), dest) <= arriveDistanceWorld;
     }
 
@@ -60,12 +62,8 @@ public class TripManager : MonoBehaviour
             currency = CurrencyManager.Instance != null ? CurrencyManager.Instance : FindFirstObjectByType<CurrencyManager>();
 
         float elapsed = Time.time - tripStartTime;
-        bool reached = IsNearDestination(carPos);
-        bool onTime = reached && elapsed <= activeJob.timeLimitSeconds;
-
-        float achievedAvgSpeed = activeJob.distanceWorld / Mathf.Max(0.01f, elapsed);
-        string rating = onTime ? "gut" : "schlecht";
-        int payout = onTime ? activeJob.quotedPriceCoins : 0;
+        var result = TripRewardCalculator.Complete(activeJob, elapsed, IsNearDestination(carPos));
+        int payout = result.payoutCoins;
 
         if (payout > 0)
         {
@@ -75,18 +73,6 @@ public class TripManager : MonoBehaviour
 
         if (speedModel != null)
             speedModel.ReportTripResult(elapsed, activeJob.timeLimitSeconds);
-
-        var result = new TripResult
-        {
-            reached = reached,
-            onTime = onTime,
-            elapsedSeconds = elapsed,
-            timeLimitSeconds = activeJob.timeLimitSeconds,
-            requiredAvgSpeed = activeJob.requiredAvgSpeed,
-            achievedAvgSpeed = achievedAvgSpeed,
-            payoutCoins = payout,
-            rating = rating
-        };
 
         activeJob = null;
         DespawnMarker();
@@ -98,7 +84,7 @@ public class TripManager : MonoBehaviour
         DespawnMarker();
         if (destinationMarkerPrefab == null || world == null || activeJob == null) return;
 
-        Vector3 pos = GridToWorld(activeJob.destinationBuilding) + new Vector3(0f, 0.7f, 0f);
+        Vector3 pos = activeJob.destinationWorld + new Vector3(0f, 0.7f, 0f);
         markerInstance = Instantiate(destinationMarkerPrefab, pos, Quaternion.identity);
         markerInstance.name = "DestinationMarker";
     }
@@ -109,17 +95,12 @@ public class TripManager : MonoBehaviour
         markerInstance = null;
     }
 
-    private Vector3 GridToWorld(Vector2Int g) => new Vector3(g.x * world.TileSize, 0f, g.y * world.TileSize);
 }
 
 public struct TripResult
 {
-    public bool reached;
     public bool onTime;
     public float elapsedSeconds;
     public float timeLimitSeconds;
-    public float requiredAvgSpeed;
-    public float achievedAvgSpeed;
     public int payoutCoins;
-    public string rating;
 }

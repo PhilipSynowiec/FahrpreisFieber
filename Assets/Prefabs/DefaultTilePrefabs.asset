@@ -14,3 +14,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::TilePrefabSet
   roadPrefab: {fileID: 2710263378220262154, guid: 1c238baa001f87c189da80a86f9df9e9, type: 3}
   buildingPrefab: {fileID: 5594596367785649300, guid: 1e968ac6612353abb9e3b8be7a0fcb63, type: 3}
+  junctionPrefab: {fileID: 1000, guid: 362cbd76949d0e3adc396bc7a1780607, type: 3}
+  parkPrefab: {fileID: 1000, guid: 0e823344e779dcddc87f047e77eb8b26, type: 3}
+  buildingVariants:
+  - {fileID: 5594596367785649300, guid: 1e968ac6612353abb9e3b8be7a0fcb63, type: 3}
+  - {fileID: 1000, guid: ad2752d0786901e8408b5e7eccb09910, type: 3}
+  - {fileID: 1000, guid: c5df31f032659657a95aeacf4511507d, type: 3}
+  - {fileID: 1000, guid: a02e53ccc600efb60e8648dc07541639, type: 3}

@@ -5,9 +5,9 @@ public class PassengerJob
 {
     public Vector2Int originBuilding;
     public Vector2Int destinationBuilding;
+    public Vector3 destinationWorld; // Reachable curbside drop-off, shared by marker and arrow.
     public float timeLimitSeconds;
 
-    public float distanceWorld;          // straight-line approximation (for price + rating)
-    public float requiredAvgSpeed;       // distance / timeLimit
+    public float distanceWorld;          // road-route distance (for price + rating)
     public int quotedPriceCoins;         // computed at offer time
 }

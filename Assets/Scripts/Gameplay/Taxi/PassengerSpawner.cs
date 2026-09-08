@@ -10,6 +10,10 @@ public class PassengerSpawner : MonoBehaviour
     [Header("Passenger Prefab")]
     [SerializeField] private Passenger passengerPrefab;
 
+    [SerializeField] private Passenger[] passengerVariants;
+    [SerializeField] private Transform taxi;
+    [SerializeField, Min(1)] private int maxPassengers = 24;
+
     [Header("Spawn Rules")]
     [Range(0f, 1f)]
     [SerializeField] private float spawnChancePerEdge = 0.08f;
@@ -35,7 +39,7 @@ public class PassengerSpawner : MonoBehaviour
 
     private void Awake()
     {
-        nextSpawnTick = Time.time + spawnIntervalSeconds;
+        nextSpawnTick = Time.time + 2f;
         if (world == null) world = FindFirstObjectByType<TileStreamingManager>();
         if (speedModel == null) speedModel = FindFirstObjectByType<RatingSpeedModel>();
 
@@ -94,48 +98,55 @@ public class PassengerSpawner : MonoBehaviour
     private void TryEdge(Vector2Int building, Vector2Int dirToRoad)
     {
         var key = new EdgeKey(building, dirToRoad);
-        if (activeByEdge.ContainsKey(key)) return;
+        if (activeByEdge.ContainsKey(key) || activeByEdge.Count >= maxPassengers) return;
 
         Vector2Int roadPos = building + dirToRoad;
+        if (!world.IsSpawned(roadPos)) return;
         var roadData = world.GetOrGenerateTileData(roadPos);
         if (roadData.kind != TileKind.Road) return;
 
         if (Random.value > spawnChancePerEdge) return;
 
-        var job = CreateJob(building);
+        var job = CreateJob(building, roadPos);
+        if (job == null) return;
 
         Vector3 pos = ComputeSpawnPosition(building, dirToRoad);
-        var p = Instantiate(passengerPrefab, pos, Quaternion.identity, transform);
+        var selected = passengerVariants != null && passengerVariants.Length > 0
+            ? passengerVariants[Random.Range(0, passengerVariants.Length)] : passengerPrefab;
+        if (selected == null) selected = passengerPrefab;
+        var p = Instantiate(selected, pos, Quaternion.LookRotation(new Vector3(dirToRoad.x, 0f, dirToRoad.y)), transform);
         p.name = $"Passenger_{building.x}_{building.y}_to_{job.destinationBuilding.x}_{job.destinationBuilding.y}";
         p.Init(job, building, dirToRoad, lifetimeSeconds);
+        var motion = p.GetComponent<PassengerMotion>();
+        if (motion != null) motion.Initialize(taxi);
 
         activeByEdge[key] = p;
     }
 
-    private PassengerJob CreateJob(Vector2Int originBuilding)
+    private PassengerJob CreateJob(Vector2Int originBuilding, Vector2Int originRoad)
     {
-        Vector2Int dest = PickDestination(originBuilding);
-
-        float distanceWorld = Vector3.Distance(GridToWorld(originBuilding), GridToWorld(dest));
+        if (!TryPickDestination(originBuilding, out Vector2Int dest)) return null;
+        Vector2Int destRoad = PickAdjacentRoad(dest, originRoad);
+        int roadSteps = world.GetRoadDistance(originRoad, destRoad);
+        if (roadSteps < 0) return null;
+        float distanceWorld = Mathf.Max(world.TileSize, (roadSteps + 1f) * world.TileSize);
         float sampledSpeed = (speedModel != null) ? speedModel.SampleSpeed() : 6f;
 
-        float timeLimit = Mathf.Clamp(distanceWorld / sampledSpeed, 10f, 240f);
-        float requiredAvgSpeed = distanceWorld / timeLimit;
-
-        int price = Mathf.RoundToInt(distanceWorld * coinsPerWorldUnit + requiredAvgSpeed * rushCoinsFactor);
+        float timeLimit = TripRewardCalculator.TimeLimit(distanceWorld, sampledSpeed);
+        int price = TripRewardCalculator.Quote(distanceWorld, timeLimit, coinsPerWorldUnit, rushCoinsFactor);
 
         return new PassengerJob
         {
             originBuilding = originBuilding,
             destinationBuilding = dest,
+            destinationWorld = GridToWorld(dest) + new Vector3(destRoad.x - dest.x, 0f, destRoad.y - dest.y) * world.TileSize * 0.65f,
             timeLimitSeconds = timeLimit,
             distanceWorld = distanceWorld,
-            requiredAvgSpeed = requiredAvgSpeed,
             quotedPriceCoins = price
         };
     }
 
-    private Vector2Int PickDestination(Vector2Int origin)
+    private bool TryPickDestination(Vector2Int origin, out Vector2Int destination)
     {
         for (int i = 0; i < 40; i++)
         {
@@ -150,10 +161,38 @@ public class PassengerSpawner : MonoBehaviour
             if (d.kind != TileKind.Building) continue;
 
             if (!HasAdjacentRoad(g)) continue;
-            return g;
+            destination = g;
+            return true;
         }
 
-        return origin + new Vector2Int(minTargetDistanceTiles, 0);
+        // Never invent an unchecked destination inside a road, park, or inaccessible building.
+        for (int radius = minTargetDistanceTiles; radius <= maxTargetDistanceTiles; radius++)
+            for (int x = -radius; x <= radius; x++)
+                for (int sign = -1; sign <= 1; sign += 2)
+                {
+                    var g = origin + new Vector2Int(x, sign * (radius - Mathf.Abs(x)));
+                    if (world.GetOrGenerateTileData(g).kind != TileKind.Building || !HasAdjacentRoad(g)) continue;
+                    destination = g;
+                    return true;
+                }
+        destination = default;
+        return false;
+    }
+
+    private static readonly Vector2Int[] Directions = { Vector2Int.right, Vector2Int.left, Vector2Int.up, Vector2Int.down };
+
+    private Vector2Int PickAdjacentRoad(Vector2Int building, Vector2Int origin)
+    {
+        Vector2Int best = building;
+        int distance = int.MaxValue;
+        foreach (var direction in Directions)
+        {
+            var road = building + direction;
+            if (world.GetOrGenerateTileData(road).kind != TileKind.Road) continue;
+            int candidate = Mathf.Abs(road.x - origin.x) + Mathf.Abs(road.y - origin.y);
+            if (candidate < distance) { best = road; distance = candidate; }
+        }
+        return best;
     }
 
     private bool HasAdjacentRoad(Vector2Int building)
@@ -175,7 +214,7 @@ public class PassengerSpawner : MonoBehaviour
         float edgeHalf = ts * 0.5f;
         float along = Random.Range(-ts * alongEdgeRandom, ts * alongEdgeRandom);
 
-        return center + dir * (edgeHalf - standOffFromBuilding) + perp * along + new Vector3(0f, 1.2f, 0f);
+        return center + dir * (edgeHalf - standOffFromBuilding) + perp * along + new Vector3(0f, ts * 0.016f, 0f);
     }
 
     private Vector3 GridToWorld(Vector2Int g) => new Vector3(g.x * world.TileSize, 0f, g.y * world.TileSize);
@@ -192,7 +231,7 @@ public class PassengerSpawner : MonoBehaviour
         edgeScratch.Clear();
         foreach (var kv in activeByEdge)
         {
-            if (kv.Key.building == grid)
+            if (kv.Key.building == grid || kv.Key.building + kv.Key.dir == grid)
                 edgeScratch.Add(kv.Key);
         }
         for (int i = 0; i < edgeScratch.Count; i++)

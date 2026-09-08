@@ -6,7 +6,7 @@ public class TilePrefabSet : ScriptableObject
     public GameObject roadPrefab;
     public GameObject buildingPrefab;
 
-    // Optional later:
-    // public GameObject[] roadVariants;
-    // public GameObject[] buildingVariants;
+    public GameObject junctionPrefab;
+    public GameObject parkPrefab;
+    public GameObject[] buildingVariants;
 }

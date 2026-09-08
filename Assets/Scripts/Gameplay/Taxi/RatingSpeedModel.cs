@@ -6,6 +6,7 @@ using UnityEngine;
 /// </summary>
 public class RatingSpeedModel : MonoBehaviour
 {
+    private const string MeanKey = "trips.difficulty.mean";
     [Header("Difficulty Settings")]
     [SerializeField] private float currentMean = 6.0f;   // Current target speed (world units/sec)
     [SerializeField] private float defaultStd = 1.5f;    // Constant variance
@@ -17,6 +18,13 @@ public class RatingSpeedModel : MonoBehaviour
     [Header("Bounds")]
     [SerializeField] private float minMean = 3.0f;
     [SerializeField] private float maxMean = 15.0f;
+
+    private void Awake()
+    {
+        float saved = PlayerPrefs.GetFloat(MeanKey, currentMean);
+        if (!float.IsNaN(saved) && !float.IsInfinity(saved))
+            currentMean = Mathf.Clamp(saved, minMean, maxMean);
+    }
 
     /// <summary>
     /// Reports the result of a trip to adjust difficulty.
@@ -44,6 +52,8 @@ public class RatingSpeedModel : MonoBehaviour
 
         // Keep within reasonable bounds
         currentMean = Mathf.Clamp(currentMean, minMean, maxMean);
+        PlayerPrefs.SetFloat(MeanKey, currentMean);
+        PlayerPrefs.Save();
 
         Debug.Log($"[RatingSpeedModel] Trip Report: Elapsed {elapsed:F1}s / Limit {timeLimit:F1}s. " +
                   $"Ratio: {ratio:F2}. New Difficulty: {currentMean:F2}");
