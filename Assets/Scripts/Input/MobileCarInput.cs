@@ -11,12 +11,28 @@ public class MobileCarInput : MonoBehaviour
     [Header("Screen hold areas (scene Canvas)")]
     [SerializeField] private RectTransform leftArea;
     [SerializeField] private RectTransform rightArea;
+    [Tooltip("Show the areas' tint and arrow Images outside mobile devices, e.g. for testing in the editor.")]
+    [SerializeField] private bool showAreasOnDesktop;
 
     public float Steer { get; private set; }
     public float Throttle { get; private set; } = 1f;
     private readonly HashSet<int> uiTouches = new HashSet<int>();
     private readonly List<RaycastResult> hits = new List<RaycastResult>();
     private bool mouseStartedOnUI;
+
+    private void Awake()
+    {
+        // The tint is only a touch hint; desktop players steer with the keyboard.
+        bool show = Application.isMobilePlatform || showAreasOnDesktop;
+        SetAreaVisible(leftArea, show);
+        SetAreaVisible(rightArea, show);
+    }
+
+    private static void SetAreaVisible(RectTransform area, bool visible)
+    {
+        if (area == null) return;
+        foreach (var image in area.GetComponentsInChildren<Image>(true)) image.enabled = visible;
+    }
 
     private void Update()
     {
@@ -71,7 +87,7 @@ public class MobileCarInput : MonoBehaviour
 
     private void AccumulatePress(Vector2 position, ref bool left, ref bool right)
     {
-        // Areas are authored in the scene; they need no visible graphic or raycast target.
+        // Areas are authored in the scene; their tint and arrow Images must not be raycast targets.
         if (Contains(leftArea, position)) left = true;
         else if (Contains(rightArea, position)) right = true;
     }
