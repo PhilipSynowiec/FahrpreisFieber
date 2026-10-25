@@ -16,9 +16,11 @@ public class MobileCarInput : MonoBehaviour
 
     public float Steer { get; private set; }
     public float Throttle { get; private set; } = 1f;
-    private readonly HashSet<int> uiTouches = new HashSet<int>();
+    // Each press keeps the side it started on, so a sliding thumb does not drop steering.
+    private enum Side { None, Left, Right }
+    private readonly Dictionary<int, Side> touchSides = new Dictionary<int, Side>();
     private readonly List<RaycastResult> hits = new List<RaycastResult>();
-    private bool mouseStartedOnUI;
+    private Side mouseSide;
 
     private void Awake()
     {
@@ -46,30 +48,25 @@ public class MobileCarInput : MonoBehaviour
                 int id = touch.touchId.ReadValue();
                 if (!touch.press.isPressed)
                 {
-                    uiTouches.Remove(id);
+                    touchSides.Remove(id);
                     continue;
                 }
                 hasTouch = true;
-                Vector2 position = touch.position.ReadValue();
-                if (touch.press.wasPressedThisFrame)
+                // A touch already held when this component enabled is classified on first sight.
+                if (touch.press.wasPressedThisFrame || !touchSides.TryGetValue(id, out Side side))
                 {
-                    uiTouches.Remove(id);
-                    if (IsInteractiveUI(position)) uiTouches.Add(id);
+                    side = SideAt(touch.position.ReadValue());
+                    touchSides[id] = side;
                 }
-                if (uiTouches.Contains(id)) continue;
-                AccumulatePress(position, ref left, ref right);
+                Accumulate(side, ref left, ref right);
             }
         }
 
         var mouse = Mouse.current;
         if (!hasTouch && mouse != null)
         {
-            Vector2 position = mouse.position.ReadValue();
-            if (mouse.leftButton.wasPressedThisFrame) mouseStartedOnUI = IsInteractiveUI(position);
-            if (mouse.leftButton.isPressed && !mouseStartedOnUI)
-            {
-                AccumulatePress(position, ref left, ref right);
-            }
+            if (mouse.leftButton.wasPressedThisFrame) mouseSide = SideAt(mouse.position.ReadValue());
+            if (mouse.leftButton.isPressed) Accumulate(mouseSide, ref left, ref right);
         }
 
         // Keyboard equivalents also make two-sided braking easy to test in the editor.
@@ -85,11 +82,19 @@ public class MobileCarInput : MonoBehaviour
         Throttle = left && right ? -1f : 1f;
     }
 
-    private void AccumulatePress(Vector2 position, ref bool left, ref bool right)
+    private Side SideAt(Vector2 position)
     {
+        if (IsInteractiveUI(position)) return Side.None;
         // Areas are authored in the scene; their tint and arrow Images must not be raycast targets.
-        if (Contains(leftArea, position)) left = true;
-        else if (Contains(rightArea, position)) right = true;
+        if (Contains(leftArea, position)) return Side.Left;
+        if (Contains(rightArea, position)) return Side.Right;
+        return Side.None;
+    }
+
+    private static void Accumulate(Side side, ref bool left, ref bool right)
+    {
+        if (side == Side.Left) left = true;
+        else if (side == Side.Right) right = true;
     }
 
     private static bool Contains(RectTransform area, Vector2 position)
@@ -116,8 +121,8 @@ public class MobileCarInput : MonoBehaviour
     private void OnApplicationPause(bool paused) { if (paused) ResetInput(); }
     private void ResetInput()
     {
-        uiTouches.Clear();
-        mouseStartedOnUI = false;
+        touchSides.Clear();
+        mouseSide = Side.None;
         Steer = 0f;
         Throttle = 1f;
     }
